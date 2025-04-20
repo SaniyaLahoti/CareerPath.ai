@@ -2,16 +2,16 @@
 
 A career guidance application that helps users discover their ideal career path through an interactive assessment powered by AI.
 
-## 🚀 One-Click Deploy (Recommended)
+## 🚀 Deploy to Railway (Recommended)
 
-The easiest way to deploy this app is using [Render](https://render.com/):
+Railway is the simplest way to deploy Chainlit apps:
 
-1. [Create a free Render account](https://dashboard.render.com/register)
-2. Click **"New +" → "Web Service"**
-3. Connect your GitHub repo or upload your code
-4. Point to `render.yaml` for auto-setup
-5. Set your environment variable `GROQ_API_KEY` with your Groq key
-6. Deploy! Your app will be live on a public URL
+1. [Sign up for Railway](https://railway.app/) (free tier available)
+2. Click **"New Project"** → **"Deploy from GitHub repo"**
+3. Connect to your GitHub repository
+4. Under **"Variables"**, add your environment variable:
+   - `GROQ_API_KEY`: Your Groq API key
+5. Deploy! Railway will automatically detect and deploy your app
 
 ## Local Development
 
@@ -22,7 +22,7 @@ pip install -r requirements.txt
 
 2. Set up your environment variables:
 - Copy the contents of `.env` file
-- Replace `your_api_key_here` with your actual Groq API key
+- Replace with your actual Groq API key
 
 3. Start the application:
 ```bash
