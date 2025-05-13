@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CareerPath.AI - Interactive Roadmap</title>
+    <!-- Vis.js for network visualization -->
+    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <!-- Custom CSS -->
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+        }
+        
+        body {
+            display: flex;
+            height: 100vh;
+            background-color: #121212;
+            color: white;
+            overflow: hidden;
+        }
+        
+        #chat-container {
+            width: 50%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #333;
+            position: relative;
+            overflow: hidden;
+            background-color: #1e1e1e;
+        }
+        
+        #roadmap-container {
+            width: 50%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+            transition: width 0.3s ease;
+            background-color: #121212;
+        }
+        
+        #chat-messages {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        
+        #chat-input-container {
+            padding: 16px;
+            border-top: 1px solid #333;
+            display: flex;
+            gap: 8px;
+            background-color: #1e1e1e;
+        }
+        
+        #chat-input {
+            flex-grow: 1;
+            padding: 12px 16px;
+            border-radius: 8px;
+            border: 1px solid #333;
+            background-color: #2a2a2a;
+            color: white;
+            font-size: 14px;
+            outline: none;
+        }
+        
+        #send-button {
+            padding: 8px 16px;
+            border-radius: 8px;
+            border: none;
+            background-color: #0066ff;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        
+        #send-button:hover {
+            background-color: #0052cc;
+        }
+        
+        .message {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .user-message {
+            align-self: flex-end;
+            background-color: #0066ff;
+            color: white;
+        }
+        
+        .bot-message {
+            align-self: flex-start;
+            background-color: #2a2a2a;
+            color: white;
+        }
+        
+        #roadmap-header {
+            padding: 16px;
+            border-bottom: 1px solid #333;
+            font-weight: 600;
+            background-color: #0e1621;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        #roadmap-viz {
+            flex-grow: 1;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        #node-details {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background-color: rgba(14, 22, 33, 0.95);
+            padding: 20px;
+            border-top: 1px solid #333;
+            transform: translateY(100%);
+            transition: transform 0.3s ease;
+            max-height: 50%;
+            overflow-y: auto;
+            z-index: 10;
+        }
+        
+        #node-details.visible {
+            transform: translateY(0);
+        }
+        
+        #node-details h2 {
+            margin-bottom: 10px;
+            font-size: 18px;
+        }
+        
+        #node-details p {
+            margin-bottom: 16px;
+            line-height: 1.5;
+            font-size: 14px;
+        }
+        
+        #node-details h3 {
+            margin: 16px 0 8px;
+            font-size: 16px;
+        }
+        
+        #node-details ul {
+            padding-left: 20px;
+            margin-bottom: 16px;
+        }
+        
+        #node-details li {
+            margin-bottom: 6px;
+            font-size: 14px;
+        }
+        
+        #close-details {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: none;
+            border: none;
+            color: white;
+            font-size: 20px;
+            cursor: pointer;
+        }
+        
+        #expand-collapse {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 20px;
+            cursor: pointer;
+        }
+        
+        /* Loading indicator */
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        @media (max-width: 768px) {
+            body {
+                flex-direction: column;
+            }
+            
+            #chat-container, #roadmap-container {
+                width: 100%;
+                height: 50%;
+            }
+            
+            #chat-container {
+                border-right: none;
+                border-bottom: 1px solid #333;
+            }
+        }
+        
+        /* Node styling for different types */
+        .category-node {
+            background-color: #39424E;
+            border: 2px solid #fff;
+            transform: rotate(45deg);
+            width: 40px;
+            height: 40px;
+        }
+        
+        .topic-node {
+            background-color: #1E3A8A;
+            border: 2px solid #fff;
+            border-radius: 5px;
+            width: 120px;
+            height: 40px;
+            font-weight: bold;
+            padding: 10px;
+            text-align: center;
+        }
+        
+        .subtopic-node {
+            background-color: #1E4A8A;
+            border: 2px solid #fff;
+            border-radius: 5px;
+            width: 120px;
+            height: 40px;
+            padding: 10px;
+            text-align: center;
+        }
+        
+        .decision-node {
+            background-color: #333;
+            border: 2px solid #fff;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            text-align: center;
+            line-height: 36px;
+        }
+        
+        .resource-node {
+            background-color: #2C5282;
+            border: 2px solid #fff;
+            border-radius: 5px;
+            width: 100px;
+            height: 30px;
+            font-style: italic;
+            padding: 5px;
+            text-align: center;
+        }
+        
+        /* Link styling */
+        .vis-network .vis-connecting-line {
+            stroke: #ccc;
+            stroke-width: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div id="chat-container">
+        <div id="chat-messages">
+            <div class="message bot-message">
+                Hi there! I'm your CareerPath.AI advisor. I can help personalize your learning roadmap based on your interests. Let me know what field you're interested in!
+            </div>
+        </div>
+        <div id="chat-input-container">
+            <input type="text" id="chat-input" placeholder="Type your message here...">
+            <button id="send-button">Send</button>
+        </div>
+    </div>
+    
+    <div id="roadmap-container">
+        <div id="roadmap-header">
+            <span>My Career Roadmap</span>
+            <button id="expand-collapse">⟷</button>
+        </div>
+        <div id="roadmap-viz"></div>
+        <div id="node-details">
+            <button id="close-details">×</button>
+            <h2 id="detail-title">Node Title</h2>
+            <p id="detail-content">Node content will appear here.</p>
+            <div id="detail-resources"></div>
+        </div>
+    </div>
+
+    <script>
+        // DOM Elements
+        const chatMessages = document.getElementById('chat-messages');
+        const chatInput = document.getElementById('chat-input');
+        const sendButton = document.getElementById('send-button');
+        const nodeDetails = document.getElementById('node-details');
+        const closeDetails = document.getElementById('close-details');
+        const detailTitle = document.getElementById('detail-title');
+        const detailContent = document.getElementById('detail-content');
+        const detailResources = document.getElementById('detail-resources');
+        const expandCollapseBtn = document.getElementById('expand-collapse');
+        
+        // Network visualization
+        let network = null;
+        let roadmapData = null;
+        
+        // Initialize the application
+        function init() {
+            // Fetch initial roadmap
+            fetchRoadmap();
+            
+            // Set up event listeners
+            sendButton.addEventListener('click', sendMessage);
+            chatInput.addEventListener('keypress', e => {
+                if (e.key === 'Enter') sendMessage();
+            });
+            closeDetails.addEventListener('click', () => {
+                nodeDetails.classList.remove('visible');
+            });
+            expandCollapseBtn.addEventListener('click', toggleRoadmapSize);
+        }
+        
+        // Fetch roadmap from API
+        async function fetchRoadmap() {
+            try {
+                const response = await fetch('/api/roadmap');
+                roadmapData = await response.json();
+                renderRoadmap();
+            } catch (error) {
+                console.error('Error fetching roadmap:', error);
+            }
+        }
+        
+        // Render the roadmap using vis.js
+        function renderRoadmap() {
+            if (!roadmapData) return;
+            
+            const container = document.getElementById('roadmap-viz');
+            
+            // Create nodes array for vis.js
+            const nodes = roadmapData.nodes.map(node => {
+                const visNode = {
+                    id: node.id,
+                    label: node.label,
+                    group: node.type
+                };
+                
+                // Add shape and styling based on node type
+                switch (node.type) {
+                    case 'category':
+                        visNode.shape = 'diamond';
+                        visNode.color = {
+                            background: '#39424E',
+                            border: '#fff'
+                        };
+                        visNode.font = { color: '#fff' };
+                        break;
+                        
+                    case 'topic':
+                        visNode.shape = 'box';
+                        visNode.color = {
+                            background: '#1E3A8A',
+                            border: '#fff'
+                        };
+                        visNode.font = { color: '#fff', bold: true };
+                        break;
+                        
+                    case 'subtopic':
+                        visNode.shape = 'box';
+                        visNode.color = {
+                            background: '#1E4A8A',
+                            border: '#fff'
+                        };
+                        visNode.font = { color: '#fff' };
+                        break;
+                        
+                    case 'decision':
+                        visNode.shape = 'circle';
+                        visNode.color = {
+                            background: '#333',
+                            border: '#fff'
+                        };
+                        visNode.font = { color: '#fff' };
+                        break;
+                        
+                    case 'resource':
+                        visNode.shape = 'box';
+                        visNode.color = {
+                            background: '#2C5282',
+                            border: '#fff'
+                        };
+                        visNode.font = { color: '#fff', italic: true };
+                        break;
+                        
+                    default:
+                        visNode.shape = 'box';
+                        visNode.color = {
+                            background: '#1E3A8A',
+                            border: '#fff'
+                        };
+                        visNode.font = { color: '#fff' };
+                }
+                
+                return visNode;
+            });
+            
+            // Create edges array for vis.js
+            const edges = roadmapData.edges.map(edge => ({
+                from: edge.from,
+                to: edge.to,
+                arrows: {
+                    to: {
+                        enabled: true,
+                        scaleFactor: 0.5
+                    }
+                },
+                color: {
+                    color: '#ccc',
+                    highlight: '#fff'
+                },
+                width: 2
+            }));
+            
+            // Create the network
+            const data = {
+                nodes: new vis.DataSet(nodes),
+                edges: new vis.DataSet(edges)
+            };
+            
+            const options = {
+                layout: {
+                    hierarchical: {
+                        direction: 'UD',
+                        sortMethod: 'directed',
+                        nodeSpacing: 150,
+                        levelSeparation: 150
+                    }
+                },
+                physics: {
+                    enabled: false
+                },
+                interaction: {
+                    dragNodes: true,
+                    dragView: true,
+                    zoomView: true
+                }
+            };
+            
+            // Destroy any existing network
+            if (network) {
+                network.destroy();
+            }
+            
+            // Create the new network
+            network = new vis.Network(container, data, options);
+            
+            // Add click event listener
+            network.on('click', function(params) {
+                if (params.nodes.length > 0) {
+                    const nodeId = params.nodes[0];
+                    showNodeDetails(nodeId);
+                }
+            });
+        }
+        
+        // Show node details in the panel
+        function showNodeDetails(nodeId) {
+            const node = roadmapData.nodes.find(n => n.id === nodeId);
+            if (!node) return;
+            
+            const details = roadmapData.nodeDetails[nodeId] || {
+                content: 'No detailed information available for this node.',
+                resources: []
+            };
+            
+            detailTitle.textContent = node.label;
+            detailContent.textContent = details.content || 'No details available.';
+            
+            // Clear previous resources
+            detailResources.innerHTML = '';
+            
+            // Add resources if available
+            if (details.resources && details.resources.length > 0) {
+                const resourcesTitle = document.createElement('h3');
+                resourcesTitle.textContent = 'Resources';
+                detailResources.appendChild(resourcesTitle);
+                
+                const resourcesList = document.createElement('ul');
+                details.resources.forEach(resource => {
+                    const li = document.createElement('li');
+                    if (resource.startsWith('http')) {
+                        const a = document.createElement('a');
+                        a.href = resource;
+                        a.target = '_blank';
+                        a.textContent = resource;
+                        a.style.color = '#66b2ff';
+                        li.appendChild(a);
+                    } else {
+                        li.textContent = resource;
+                    }
+                    resourcesList.appendChild(li);
+                });
+                detailResources.appendChild(resourcesList);
+            }
+            
+            // Show the details panel
+            nodeDetails.classList.add('visible');
+        }
+        
+        // Toggle roadmap size
+        function toggleRoadmapSize() {
+            const chatContainer = document.getElementById('chat-container');
+            const roadmapContainer = document.getElementById('roadmap-container');
+            
+            if (chatContainer.style.width === '25%') {
+                chatContainer.style.width = '50%';
+                roadmapContainer.style.width = '50%';
+                expandCollapseBtn.textContent = '⟷';
+            } else {
+                chatContainer.style.width = '25%';
+                roadmapContainer.style.width = '75%';
+                expandCollapseBtn.textContent = '⟷';
+            }
+            
+            // Wait for transition to complete, then redraw the network
+            setTimeout(() => {
+                if (network) {
+                    network.redraw();
+                    network.fit();
+                }
+            }, 300);
+        }
+        
+        // Send message to the chat
+        async function sendMessage() {
+            const text = chatInput.value.trim();
+            if (!text) return;
+            
+            // Add user message to chat
+            addMessage(text, 'user');
+            chatInput.value = '';
+            
+            // Show loading indicator
+            const loadingDiv = document.createElement('div');
+            loadingDiv.className = 'message bot-message';
+            const loadingIndicator = document.createElement('div');
+            loadingIndicator.className = 'loading';
+            loadingDiv.appendChild(loadingIndicator);
+            chatMessages.appendChild(loadingDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            
+            try {
+                // Send message to API
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ message: text })
+                });
+                
+                const data = await response.json();
+                
+                // Remove loading indicator
+                chatMessages.removeChild(loadingDiv);
+                
+                // Add bot response to chat
+                if (data.response) {
+                    addMessage(data.response, 'bot');
+                }
+                
+                // Update roadmap if needed
+                if (data.roadmap) {
+                    roadmapData = data.roadmap;
+                    renderRoadmap();
+                }
+            } catch (error) {
+                // Remove loading indicator
+                chatMessages.removeChild(loadingDiv);
+                
+                // Show error message
+                addMessage('Sorry, I encountered an error while processing your message. Please try again.', 'bot');
+                console.error('Error sending message:', error);
+            }
+        }
+        
+        // Add a message to the chat
+        function addMessage(text, sender) {
+            const message = document.createElement('div');
+            message.className = `message ${sender}-message`;
+            message.textContent = text;
+            chatMessages.appendChild(message);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+        
+        // Initialize the application
+        document.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>

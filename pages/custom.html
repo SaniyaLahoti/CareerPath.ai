@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CareerPath.AI - Interactive Roadmap</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+        }
+        
+        body {
+            display: flex;
+            height: 100vh;
+            background-color: #121212;
+            color: white;
+            overflow: hidden;
+        }
+        
+        #chat-container {
+            width: 50%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #333;
+            position: relative;
+            overflow: hidden;
+            background-color: #1e1e1e;
+        }
+        
+        #roadmap-container {
+            width: 50%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+            transition: width 0.3s ease;
+        }
+        
+        #chat-messages {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        
+        #chat-input-container {
+            padding: 16px;
+            border-top: 1px solid #333;
+            display: flex;
+            gap: 8px;
+            background-color: #1e1e1e;
+        }
+        
+        #chat-input {
+            flex-grow: 1;
+            padding: 12px 16px;
+            border-radius: 8px;
+            border: 1px solid #333;
+            background-color: #2a2a2a;
+            color: white;
+            font-size: 14px;
+            outline: none;
+        }
+        
+        #send-button {
+            padding: 8px 16px;
+            border-radius: 8px;
+            border: none;
+            background-color: #0066ff;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        
+        #send-button:hover {
+            background-color: #0052cc;
+        }
+        
+        .message {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .user-message {
+            align-self: flex-end;
+            background-color: #0066ff;
+            color: white;
+        }
+        
+        .bot-message {
+            align-self: flex-start;
+            background-color: #2a2a2a;
+            color: white;
+        }
+        
+        #roadmap-header {
+            padding: 16px;
+            border-bottom: 1px solid #333;
+            font-weight: 600;
+            background-color: #0e1621;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        #roadmap-viz {
+            flex-grow: 1;
+            overflow: auto;
+            padding: 20px;
+            background-color: #121212;
+        }
+        
+        .node {
+            cursor: pointer;
+        }
+        
+        .node:hover rect, .node:hover circle, .node:hover polygon {
+            stroke: #0066ff;
+            stroke-width: 3px;
+        }
+        
+        .node-details {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background-color: rgba(14, 22, 33, 0.95);
+            padding: 20px;
+            border-top: 1px solid #333;
+            transform: translateY(100%);
+            transition: transform 0.3s ease;
+            max-height: 50%;
+            overflow-y: auto;
+        }
+        
+        .node-details.visible {
+            transform: translateY(0);
+        }
+        
+        .node-details h2 {
+            margin-bottom: 10px;
+            font-size: 18px;
+        }
+        
+        .node-details p {
+            margin-bottom: 16px;
+            line-height: 1.5;
+            font-size: 14px;
+        }
+        
+        .node-details h3 {
+            margin: 16px 0 8px;
+            font-size: 16px;
+        }
+        
+        .node-details ul {
+            padding-left: 20px;
+            margin-bottom: 16px;
+        }
+        
+        .node-details li {
+            margin-bottom: 6px;
+            font-size: 14px;
+        }
+        
+        .close-details {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: none;
+            border: none;
+            color: white;
+            font-size: 20px;
+            cursor: pointer;
+        }
+        
+        .tooltip {
+            position: absolute;
+            padding: 10px;
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            border-radius: 5px;
+            pointer-events: none;
+            font-size: 12px;
+        }
+        
+        @media (max-width: 768px) {
+            body {
+                flex-direction: column;
+            }
+            
+            #chat-container, #roadmap-container {
+                width: 100%;
+                height: 50%;
+            }
+            
+            #chat-container {
+                border-right: none;
+                border-bottom: 1px solid #333;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="chat-container">
+        <div id="chat-messages">
+            <div class="message bot-message">
+                Hi there! I'm your CareerPath.AI advisor. I can help personalize your learning roadmap based on your interests. Let me know what field you're interested in!
+            </div>
+        </div>
+        <div id="chat-input-container">
+            <input type="text" id="chat-input" placeholder="Type your message here...">
+            <button id="send-button">Send</button>
+        </div>
+    </div>
+    
+    <div id="roadmap-container">
+        <div id="roadmap-header">
+            <span>My Career Roadmap</span>
+            <button id="expand-collapse">⟷</button>
+        </div>
+        <div id="roadmap-viz"></div>
+        <div class="node-details" id="node-details">
+            <button class="close-details" id="close-details">×</button>
+            <h2 id="detail-title">Node Title</h2>
+            <p id="detail-content">Node content will appear here.</p>
+            <div id="detail-resources"></div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize roadmap data
+        const initialRoadmap = {
+            id: "root",
+            title: "My Roadmap",
+            type: "ROOT",
+            content: "Your personalized career path roadmap",
+            children: [
+                {
+                    id: "cs",
+                    title: "Computer Science",
+                    type: "CATEGORY",
+                    content: "Computer Science career paths and specializations",
+                    children: [
+                        {
+                            id: "fullstack",
+                            title: "Full Stack Developer",
+                            type: "CATEGORY",
+                            content: "Career path: Full Stack Developer",
+                            children: []
+                        },
+                        {
+                            id: "ai",
+                            title: "AI Engineer",
+                            type: "CATEGORY",
+                            content: "Career path: AI Engineer",
+                            children: [
+                                {
+                                    id: "what-is-ai",
+                                    title: "What is AI Engineer",
+                                    type: "TOPIC",
+                                    content: "AI Engineers develop and implement AI and machine learning solutions. They bridge the gap between data science and production systems.",
+                                    resources: ["https://www.coursera.org/articles/ai-engineer"],
+                                    children: [
+                                        {
+                                            id: "decision",
+                                            title: "OR",
+                                            type: "DECISION",
+                                            content: "Choose a specialization",
+                                            children: [
+                                                {
+                                                    id: "ai-opt",
+                                                    title: "AI",
+                                                    type: "TOPIC",
+                                                    content: "Focus on AI specialization",
+                                                    children: []
+                                                },
+                                                {
+                                                    id: "ml-opt",
+                                                    title: "ML",
+                                                    type: "TOPIC",
+                                                    content: "Focus on ML specialization",
+                                                    children: []
+                                                }
+                                            ]
+                                        }
+                                    ]
+                                },
+                                {
+                                    id: "tasks",
+                                    title: "Tasks of an AI Engineer",
+                                    type: "TOPIC",
+                                    content: "Key responsibilities and day-to-day tasks of an AI Engineer",
+                                    children: [
+                                        {
+                                            id: "prompt-eng",
+                                            title: "Prompt Engineering",
+                                            type: "SUBTOPIC",
+                                            content: "Learn about Prompt Engineering and its applications",
+                                            children: []
+                                        },
+                                        {
+                                            id: "agents",
+                                            title: "Building Agents",
+                                            type: "SUBTOPIC",
+                                            content: "Learn about Building Agents and its applications",
+                                            children: []
+                                        },
+                                        {
+                                            id: "rag",
+                                            title: "RAG",
+                                            type: "SUBTOPIC",
+                                            content: "Learn about RAG and its applications",
+                                            children: []
+                                        },
+                                        {
+                                            id: "genai",
+                                            title: "Generative AI",
+                                            type: "SUBTOPIC",
+                                            content: "Learn about Generative AI and its applications",
+                                            children: []
+                                        }
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            id: "blockchain",
+                            title: "Blockchain",
+                            type: "CATEGORY",
+                            content: "Career path: Blockchain",
+                            children: []
+                        },
+                        {
+                            id: "devops",
+                            title: "DevOps",
+                            type: "CATEGORY",
+                            content: "Career path: DevOps",
+                            children: []
+                        }
+                    ]
+                },
+                {
+                    id: "ml",
+                    title: "Machine Learning",
+                    type: "CATEGORY",
+                    content: "Machine Learning learning path",
+                    children: [
+                        {
+                            id: "foundation",
+                            title: "Build a foundation in Python and statistics",
+                            type: "TOPIC",
+                            content: "Learn the fundamentals of Python programming and statistics for ML",
+                            resources: ["Coursera"],
+                            children: [
+                                {
+                                    id: "applications",
+                                    title: "Explore real-world AI applications",
+                                    type: "TOPIC",
+                                    content: "Practical applications of AI in different domains",
+                                    resources: ["skin cancer classification", "neural networks", "fuzzy logic"],
+                                    children: [
+                                        {
+                                            id: "nn",
+                                            title: "Experiment with neural networks and CNNs",
+                                            type: "TOPIC",
+                                            content: "Hands-on practice with neural networks and convolutional neural networks",
+                                            resources: ["edX"],
+                                            children: []
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        };
+
+        // Message handling
+        const chatMessages = document.getElementById('chat-messages');
+        const chatInput = document.getElementById('chat-input');
+        const sendButton = document.getElementById('send-button');
+        const nodeDetails = document.getElementById('node-details');
+        const closeDetails = document.getElementById('close-details');
+        const detailTitle = document.getElementById('detail-title');
+        const detailContent = document.getElementById('detail-content');
+        const detailResources = document.getElementById('detail-resources');
+        const expandCollapseBtn = document.getElementById('expand-collapse');
+        
+        // Global variables
+        let roadmapData = initialRoadmap;
+        let chatHistory = [];
+        
+        // Function to show node details
+        function showNodeDetails(node) {
+            detailTitle.textContent = node.title;
+            detailContent.textContent = node.content;
+            
+            // Clear previous resources
+            detailResources.innerHTML = '';
+            
+            // Add resources if available
+            if (node.resources && node.resources.length > 0) {
+                const resourcesTitle = document.createElement('h3');
+                resourcesTitle.textContent = 'Resources';
+                detailResources.appendChild(resourcesTitle);
+                
+                const resourcesList = document.createElement('ul');
+                node.resources.forEach(resource => {
+                    const li = document.createElement('li');
+                    if (resource.startsWith('http')) {
+                        const a = document.createElement('a');
+                        a.href = resource;
+                        a.target = '_blank';
+                        a.textContent = resource;
+                        a.style.color = '#66b2ff';
+                        li.appendChild(a);
+                    } else {
+                        li.textContent = resource;
+                    }
+                    resourcesList.appendChild(li);
+                });
+                detailResources.appendChild(resourcesList);
+            }
+            
+            nodeDetails.classList.add('visible');
+        }
+        
+        // Close node details
+        closeDetails.addEventListener('click', () => {
+            nodeDetails.classList.remove('visible');
+        });
+        
+        // Handle expand/collapse button
+        expandCollapseBtn.addEventListener('click', () => {
+            const chatContainer = document.getElementById('chat-container');
+            const roadmapContainer = document.getElementById('roadmap-container');
+            
+            if (chatContainer.style.width === '25%') {
+                chatContainer.style.width = '50%';
+                roadmapContainer.style.width = '50%';
+                expandCollapseBtn.textContent = '⟷';
+            } else {
+                chatContainer.style.width = '25%';
+                roadmapContainer.style.width = '75%';
+                expandCollapseBtn.textContent = '⟷';
+            }
+            
+            // Force D3 to redraw the roadmap with new dimensions
+            renderRoadmap(roadmapData);
+        });
+        
+        // Function to add user message to chat
+        function addUserMessage(text) {
+            const message = document.createElement('div');
+            message.className = 'message user-message';
+            message.textContent = text;
+            chatMessages.appendChild(message);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            
+            // Add to chat history
+            chatHistory.push({ role: 'user', content: text });
+        }
+        
+        // Function to add bot message to chat
+        function addBotMessage(text) {
+            const message = document.createElement('div');
+            message.className = 'message bot-message';
+            message.textContent = text;
+            chatMessages.appendChild(message);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            
+            // Add to chat history
+            chatHistory.push({ role: 'assistant', content: text });
+        }
+        
+        // Send message on button click
+        sendButton.addEventListener('click', () => {
+            const text = chatInput.value.trim();
+            if (text) {
+                addUserMessage(text);
+                chatInput.value = '';
+                
+                // Simulate processing...
+                setTimeout(() => {
+                    // Process the user's message and update the roadmap
+                    processUserInput(text);
+                }, 500);
+            }
+        });
+        
+        // Send message on Enter key press
+        chatInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendButton.click();
+            }
+        });
+        
+        // Process user input and update roadmap
+        function processUserInput(text) {
+            // Simulate AI processing for demo purposes
+            const lowerText = text.toLowerCase();
+            
+            // Add a thinking indicator
+            addBotMessage("Thinking...");
+            
+            // Remove the thinking message after a delay
+            setTimeout(() => {
+                chatMessages.removeChild(chatMessages.lastChild);
+                
+                // Generate a response based on user input
+                let response = "I'm analyzing your interests to personalize your career roadmap.";
+                
+                // Look for career-related keywords
+                if (lowerText.includes('ai') || lowerText.includes('machine learning') || lowerText.includes('artificial intelligence')) {
+                    response = "I see you're interested in AI and Machine Learning! I've updated your roadmap with more detailed information about AI Engineering paths.";
+                    
+                    // Update the roadmap data with more AI-specific nodes
+                    const aiNode = findNodeById(roadmapData, 'ai');
+                    if (aiNode) {
+                        // Add more specific AI topics
+                        const specificAITopic = {
+                            id: 'ai-details-' + Date.now(),
+                            title: "AI Specialization Details",
+                            type: "TOPIC",
+                            content: "Based on your interest in AI, here are specific areas you might want to explore: Deep Learning, Computer Vision, NLP, and Reinforcement Learning.",
+                            children: [
+                                {
+                                    id: 'dl-' + Date.now(),
+                                    title: "Deep Learning",
+                                    type: "SUBTOPIC",
+                                    content: "Study neural network architectures and training techniques.",
+                                    resources: ["deeplearning.ai", "Fast.ai courses"],
+                                    children: []
+                                }
+                            ]
+                        };
+                        aiNode.children.push(specificAITopic);
+                    }
+                } else if (lowerText.includes('web') || lowerText.includes('front') || lowerText.includes('full stack')) {
+                    response = "Web development is a great field! I've updated your roadmap with more detailed information about Full Stack Development paths.";
+                    
+                    // Update the roadmap data with web dev specific nodes
+                    const webNode = findNodeById(roadmapData, 'fullstack');
+                    if (webNode) {
+                        // Add more specific web dev topics
+                        webNode.children.push({
+                            id: 'frontend-' + Date.now(),
+                            title: "Frontend Development",
+                            type: "TOPIC",
+                            content: "Learn HTML, CSS, JavaScript and modern frameworks like React or Vue.",
+                            resources: ["freeCodeCamp", "MDN Web Docs"],
+                            children: []
+                        });
+                        webNode.children.push({
+                            id: 'backend-' + Date.now(),
+                            title: "Backend Development",
+                            type: "TOPIC",
+                            content: "Learn server-side programming, databases, and API development.",
+                            resources: ["Node.js documentation", "Express.js tutorials"],
+                            children: []
+                        });
+                    }
+                } else if (lowerText.includes('blockchain') || lowerText.includes('crypto')) {
+                    response = "Blockchain technology is cutting-edge! I've updated your roadmap with more information about blockchain development.";
+                    
+                    // Update blockchain node
+                    const blockchainNode = findNodeById(roadmapData, 'blockchain');
+                    if (blockchainNode) {
+                        blockchainNode.children.push({
+                            id: 'crypto-' + Date.now(),
+                            title: "Cryptocurrency Development",
+                            type: "TOPIC",
+                            content: "Learn about blockchain protocols, smart contracts, and decentralized applications.",
+                            resources: ["Ethereum documentation", "Solidity tutorials"],
+                            children: []
+                        });
+                    }
+                } else if (lowerText.includes('devops') || lowerText.includes('cloud')) {
+                    response = "DevOps is a highly sought-after skill! I've updated your roadmap with detailed information about DevOps career paths.";
+                    
+                    // Update DevOps node
+                    const devopsNode = findNodeById(roadmapData, 'devops');
+                    if (devopsNode) {
+                        devopsNode.children.push({
+                            id: 'cicd-' + Date.now(),
+                            title: "CI/CD Pipelines",
+                            type: "TOPIC",
+                            content: "Learn about continuous integration and deployment practices.",
+                            resources: ["Jenkins documentation", "GitHub Actions tutorials"],
+                            children: []
+                        });
+                    }
+                }
+                
+                // Add the response to the chat
+                addBotMessage(response);
+                
+                // Re-render the roadmap with the updated data
+                renderRoadmap(roadmapData);
+            }, 1500);
+        }
+        
+        // Function to find a node by ID (recursive)
+        function findNodeById(node, id) {
+            if (node.id === id) {
+                return node;
+            }
+            
+            if (node.children) {
+                for (const child of node.children) {
+                    const result = findNodeById(child, id);
+                    if (result) {
+                        return result;
+                    }
+                }
+            }
+            
+            return null;
+        }
+        
+        // Render roadmap visualization
+        function renderRoadmap(data) {
+            // Clear existing visualization
+            d3.select('#roadmap-viz').selectAll('*').remove();
+            
+            const roadmapViz = document.getElementById('roadmap-viz');
+            const width = roadmapViz.clientWidth;
+            const height = roadmapViz.clientHeight || 600;
+            
+            // Create SVG container
+            const svg = d3.select('#roadmap-viz')
+                .append('svg')
+                .attr('width', width)
+                .attr('height', height)
+                .append('g')
+                .attr('transform', 'translate(40,40)');
+            
+            // Create hierarchical layout
+            const root = d3.hierarchy(data);
+            
+            // Create a tree layout
+            const treeLayout = d3.tree()
+                .size([width - 100, height - 100]);
+            
+            // Apply the layout
+            const treeData = treeLayout(root);
+            
+            // Create tooltip
+            const tooltip = d3.select('body').append('div')
+                .attr('class', 'tooltip')
+                .style('opacity', 0);
+            
+            // Create links between nodes
+            svg.selectAll('.link')
+                .data(treeData.links())
+                .enter()
+                .append('path')
+                .attr('class', 'link')
+                .attr('d', d => {
+                    return `M${d.source.x},${d.source.y} C${d.source.x},${(d.source.y + d.target.y) / 2} ${d.target.x},${(d.source.y + d.target.y) / 2} ${d.target.x},${d.target.y}`;
+                })
+                .attr('fill', 'none')
+                .attr('stroke', '#ccc')
+                .attr('stroke-width', 2);
+            
+            // Create node groups
+            const nodes = svg.selectAll('.node')
+                .data(treeData.descendants())
+                .enter()
+                .append('g')
+                .attr('class', 'node')
+                .attr('transform', d => `translate(${d.x},${d.y})`);
+            
+            // Add node shapes based on type
+            nodes.each(function(d) {
+                const node = d3.select(this);
+                const type = d.data.type || 'TOPIC';
+                
+                if (type === 'DECISION') {
+                    // Circle for decision nodes
+                    node.append('circle')
+                        .attr('r', 25)
+                        .attr('fill', '#333')
+                        .attr('stroke', '#fff')
+                        .attr('stroke-width', 2);
+                } else if (type === 'CATEGORY' || type === 'diamond') {
+                    // Diamond for categories
+                    node.append('polygon')
+                        .attr('points', '0,-30 30,0 0,30 -30,0')
+                        .attr('fill', '#39424E')
+                        .attr('stroke', '#fff')
+                        .attr('stroke-width', 2);
+                } else {
+                    // Rectangle for other nodes
+                    node.append('rect')
+                        .attr('x', -60)
+                        .attr('y', -20)
+                        .attr('width', 120)
+                        .attr('height', 40)
+                        .attr('rx', 5)
+                        .attr('ry', 5)
+                        .attr('fill', '#1E3A8A')
+                        .attr('stroke', '#fff')
+                        .attr('stroke-width', 2);
+                }
+                
+                // Add title text
+                node.append('text')
+                    .attr('dy', 5)
+                    .attr('text-anchor', 'middle')
+                    .attr('fill', 'white')
+                    .style('font-size', '12px')
+                    .style('font-weight', 'bold')
+                    .text(d => d.data.title.length > 15 ? d.data.title.substring(0, 15) + '...' : d.data.title);
+                
+                // Make nodes interactive
+                node.style('cursor', 'pointer')
+                    .on('mouseover', function(event, d) {
+                        tooltip.transition()
+                            .duration(200)
+                            .style('opacity', .9);
+                        tooltip.html(d.data.title)
+                            .style('left', (event.pageX + 10) + 'px')
+                            .style('top', (event.pageY + 10) + 'px');
+                    })
+                    .on('mouseout', function() {
+                        tooltip.transition()
+                            .duration(500)
+                            .style('opacity', 0);
+                    })
+                    .on('click', function(event, d) {
+                        showNodeDetails(d.data);
+                    });
+            });
+        }
+        
+        // Initialize the roadmap visualization
+        renderRoadmap(roadmapData);
+        
+        // Add initial messages to the chat
+        addBotMessage("I've prepared an interactive career roadmap for you. As we chat, I'll help you explore different paths and options. Click on any node in the roadmap to see more details!");
+    </script>
+</body>
+</html>
