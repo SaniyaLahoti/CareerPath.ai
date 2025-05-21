@@ -83,8 +83,8 @@ async def display_roadmap(highlight_nodes=None):
     <script>
     (function() {
         // Parse the roadmap data
-        const roadmapData = {JSON_DATA};
-        const highlightNodes = {HIGHLIGHT_NODES};
+        const roadmapData = JSON.parse(JSON.stringify({JSON_DATA}));
+        const highlightNodes = JSON.parse(JSON.stringify({HIGHLIGHT_NODES}));
         
         // Set up dimensions
         const container = document.getElementById('roadmap-svg');
@@ -409,6 +409,9 @@ async def analyze_user_message(message_text, current_roadmap):
             json_text = llm_response.split("```json")[1].split("```")[0].strip()
         elif "```" in llm_response:
             json_text = llm_response.split("```")[1].split("```")[0].strip()
+    except Exception as e:
+        print(f"Error processing LLM response: {str(e)}")
+        return current_roadmap, []
             
         updated_roadmap = json.loads(json_text)
         

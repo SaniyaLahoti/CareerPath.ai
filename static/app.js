@@ -644,6 +644,9 @@ async function sendMessage() {
 // Process chat through the server API
 async function sendChatMessage(message) {
     try {
+        console.log('Sending chat message to API:', message);
+        console.time('API Request Time');
+        
         // Send message to API
         const response = await fetch('/api/chat', {
             method: 'POST',
@@ -652,6 +655,8 @@ async function sendChatMessage(message) {
             },
             body: JSON.stringify({ message: message })
         });
+        
+        console.timeEnd('API Request Time');
         
         if (!response.ok) {
             throw new Error(`Server returned ${response.status}: ${response.statusText}`);

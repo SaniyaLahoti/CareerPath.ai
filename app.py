@@ -1,111 +1,667 @@
 import os
 import json
 import uuid
-import chainlit as cl
+import datetime
+from flask import Flask, render_template, request, jsonify, session
 from groq import Groq
 from dotenv import load_dotenv
 import requests
 from bs4 import BeautifulSoup
 from typing import Dict, Any, List, Optional
 
-# Set page configuration
-cl.config.ui.name = "CareerPath.AI"
-cl.config.ui.description = "Your personalized career roadmap assistant"
-
-# Add custom CSS for split-screen layout
-cl.config.ui.custom_css = """
-/* Custom CSS for split-screen layout */
-.split-view {
-    display: flex;
-    height: calc(100vh - 160px);
-    margin-top: 20px;
-    margin-bottom: 20px;
-}
-
-.chat-side {
-    width: 50%;
-    padding-right: 20px;
-}
-
-.roadmap-side {
-    width: 50%;
-    background: #121212;
-    border-radius: 8px;
-    overflow: hidden;
-    padding: 10px;
-    position: relative;
-}
-
-.roadmap-title {
-    color: white;
-    margin-bottom: 10px;
-    font-size: 18px;
-    font-weight: bold;
-}
-
-@media (max-width: 768px) {
-    .split-view {
-        flex-direction: column;
-    }
-    
-    .chat-side, .roadmap-side {
-        width: 100%;
-    }
-    
-    .chat-side {
-        margin-bottom: 20px;
-    }
-}
-
-/* Styling for roadmap visualization */
-.node rect, .node circle, .node polygon {
-    stroke: #fff;
-    fill-opacity: 0.9;
-    stroke-width: 1.5px;
-}
-
-.node:hover rect, .node:hover circle, .node:hover polygon {
-    stroke: #00a2ff;
-    stroke-width: 2.5px;
-    cursor: pointer;
-}
-
-.node text {
-    font-weight: bold;
-    font-family: 'Inter', sans-serif;
-    font-size: 12px;
-    fill: white;
-}
-
-.node-details {
-    background: rgba(30, 58, 138, 0.95);
-    border-radius: 8px;
-    padding: 15px;
-    margin-top: 15px;
-    color: white;
-}
-
-.node-resources {
-    margin-top: 10px;
-}
-
-.node-resources a {
-    color: #66b2ff;
-}
-
-.link {
-    fill: none;
-    stroke: #ccc;
-    stroke-width: 1.5px;
-}
-"""
-
-# Load environment variables
+# Force load environment variables at the very beginning
 load_dotenv()
+
+# Debug environment variables
+groq_api_key = os.getenv("GROQ_API_KEY")
+print(f"\n======== FLASK APP STARTUP - ENVIRONMENT CHECK ========")
+print(f"GROQ_API_KEY found! Key starts with: {groq_api_key[:5]}...") if groq_api_key else print("\nCRITICAL ERROR: GROQ_API_KEY NOT FOUND!\n")
+print(f"Current working directory: {os.getcwd()}")
+print(f"ENV file exists: {os.path.exists('.env')}")
+print(f"ENV variables loaded: {bool(load_dotenv())}")
+print("====================================================\n")
+
+# Import roadmap generator
+from roadmap_generator import RoadmapGenerator
+from roadmap_integration import update_roadmap_with_dynamic_content, initialize_roadmap_cache
+from roadmap_knowledge_customizer import update_roadmap_with_knowledge_level
+
+# Import LLM chat handler
+from llm_chat import LLMChatHandler
+
+# Import roadmap knowledge customizer
+from roadmap_knowledge_customizer import update_roadmap_with_knowledge_level
+
+# Sample roadmap data
+sample_roadmap = {
+    'id': 'root',
+    'title': 'Career Path',
+    'type': 'ROOT',
+    'content': 'Your personalized career path roadmap',
+    'children': [
+        {
+            'id': 'cs',
+            'title': 'Computer Science',
+            'type': 'CATEGORY',
+            'content': 'Computer Science career paths and specializations',
+            'children': [
+                {
+                    'id': 'ai',
+                    'title': 'AI Engineer',
+                    'type': 'CATEGORY',
+                    'content': 'Career path: AI Engineer',
+                    'children': [
+                        {
+                            'id': 'what_is_ai',
+                            'title': 'What is AI Engineer',
+                            'type': 'TOPIC',
+                            'content': 'AI Engineers develop and implement AI and machine learning solutions.',
+                            'resources': ['https://www.coursera.org/articles/ai-engineer'],
+                            'children': []
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}
+
+# Initialize Flask app
+app = Flask(__name__, static_folder='static', static_url_path='/static')
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key-for-careerpath-ai')
+
+# Initialize roadmap cache on startup
+initialize_roadmap_cache()
+
+# Serve index.html as the main route
+@app.route('/')
+def index():
+    return app.send_static_file('index.html')
+
+# Test endpoint to directly call the Groq API
+@app.route('/test-api')
+def test_api():
+    try:
+        print("\n============ API TEST ENDPOINT CALLED ============")
+        api_key = os.getenv("GROQ_API_KEY")
+        
+        if not api_key:
+            return jsonify({
+                'success': False,
+                'error': 'API key not found'
+            })
+            
+        # Initialize client
+        client = Groq(api_key=api_key)
+        
+        # Make a simple API call
+        response = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": "Say hello and introduce yourself briefly."}
+            ],
+            model="llama3-70b-8192",
+            temperature=0.7,
+            max_tokens=100
+        )
+        
+        # Return the response
+        return jsonify({
+            'success': True,
+            'response': response.choices[0].message.content
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        })
+
+# Session data to track conversation state
+user_sessions = {}
+
+# Check if API key is loaded
+groq_api_key = os.getenv("GROQ_API_KEY")
+if not groq_api_key:
+    print("WARNING: GROQ_API_KEY not found in environment variables!")
+    print("Please make sure your .env file contains: GROQ_API_KEY=your_key_here")
+else:
+    print(f"Groq API key found! Key starts with: {groq_api_key[:5]}...")
+
+# Initialize the LLM chat handler
+llm_chat_handler = LLMChatHandler()
+
+# Chat endpoint
+@app.route('/api/chat', methods=['POST'])
+def chat():
+    try:
+        print("\n============ CHAT ENDPOINT CALLED ============")
+        print(f"Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # Get the user message
+        data = request.get_json()
+        user_message = data.get('message', '').strip()
+        print(f"Received message: {user_message}")
+        
+        if not user_message:
+            return jsonify({
+                'response': 'I did not receive a message. Please try again.',
+                'roadmap': empty_roadmap
+            })
+        
+        # Get session ID or create a new one if needed
+        if 'session_id' not in session:
+            session['session_id'] = str(uuid.uuid4())
+            
+        # Initialize conversation history if needed
+        if 'conversation' not in session:
+            session['conversation'] = []
+            
+        # Initialize interests if needed
+        if 'interests' not in session:
+            session['interests'] = []
+            
+        # Initialize roadmap if needed
+        if 'roadmap' not in session:
+            session['roadmap'] = empty_roadmap
+            
+        # Add the user message to conversation history
+        session['conversation'].append({"role": "user", "content": user_message})
+        print(f"Added message to conversation. Total messages: {len(session['conversation'])}")
+        
+        # Get the API key
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            print("ERROR: No API key available")
+            return jsonify({
+                'response': 'I cannot connect to my AI capabilities. Please check the API key.',
+                'roadmap': session['roadmap']
+            })
+            
+        # Create a direct Groq client with the API key
+        print("Creating Groq client with API key")
+        client = Groq(api_key=api_key)
+        
+        # Prepare the messages for the API call with clear instructions for conciseness
+        messages = [
+            {"role": "system", "content": "You are CareerPath.AI, a helpful career advisor who specializes in creating personalized learning roadmaps for agentic AI. Your goal is to understand the user's interests and skill level, then provide EXTREMELY CONCISE guidance and next steps. IMPORTANT: Keep all responses under 150 words total."}, 
+            {"role": "system", "content": "RESPONSE FORMAT RULES:\n1) Use bullet points for lists\n2) Maximum 2-3 sentences per paragraph\n3) Only list 1-2 resources per topic\n4) Use markdown for formatting\n5) Focus on next actions, not explanations\n6) Be direct and specific"}
+        ]
+        
+        # Add conversation history (limited to prevent context overflow)
+        if len(session['conversation']) > 15:
+            # Include the first message and the latest messages
+            messages.append(session['conversation'][0])
+            messages.extend(session['conversation'][-14:])
+        else:
+            messages.extend(session['conversation'])
+            
+        print(f"Sending {len(messages)} messages to Groq API")
+        for i, msg in enumerate(messages):
+            print(f"[{i}] {msg['role'].upper()}: {msg['content'][:50]}...")
+            
+        try:
+            # Make the API call
+            print("Making API call with model: llama3-70b-8192")
+            response = client.chat.completions.create(
+                messages=messages,
+                model="llama3-70b-8192",  # Use a known working model
+                temperature=0.7,
+                max_tokens=800,
+                top_p=1
+            )
+            
+            # Extract response
+            bot_response = response.choices[0].message.content
+            print(f"API response received: {bot_response[:100]}...")
+            
+            # Add bot response to conversation history
+            session['conversation'].append({"role": "assistant", "content": bot_response})
+            
+            # Extract interests and knowledge level from the user message (more sophisticated)
+            interests = []
+            knowledge_level = 'beginner'  # Default level
+            
+            # Check for agentic AI specific interest
+            if 'agentic ai' in user_message.lower() or ('agentic' in user_message.lower() and 'ai' in user_message.lower()):
+                interests.append('agentic-ai')
+                
+                # Determine knowledge level for agentic AI based on mentioned concepts
+                advanced_concepts = ['rag', 'vector embeddings', 'multi-agent systems', 'tree of thought', 'reasoning', 'llm agents']
+                intermediate_concepts = ['frameworks', 'langchain', 'tools', 'agent memory', 'workflows']
+                beginner_concepts = ['what is', 'how to', 'basics', 'fundamentals', 'introduction']
+                
+                # Check for knowledge indicators in the message
+                user_msg_lower = user_message.lower()
+                
+                # Check if user explicitly mentions their knowledge level
+                if 'advanced' in user_msg_lower or 'expert' in user_msg_lower or any(concept in user_msg_lower for concept in advanced_concepts):
+                    knowledge_level = 'advanced'
+                    print(f"Detected ADVANCED knowledge level for agentic AI")
+                elif 'intermediate' in user_msg_lower or any(concept in user_msg_lower for concept in intermediate_concepts):
+                    knowledge_level = 'intermediate'
+                    print(f"Detected INTERMEDIATE knowledge level for agentic AI")
+                elif any(concept in user_msg_lower for concept in beginner_concepts):
+                    knowledge_level = 'beginner'
+                    print(f"Detected BEGINNER knowledge level for agentic AI")
+                
+                print(f"Knowledge level set to: {knowledge_level} for agentic AI")
+            
+            # General AI interest detection
+            elif 'ai' in user_message.lower() or 'artificial intelligence' in user_message.lower() or 'machine learning' in user_message.lower():
+                interests.append('ai')
+            
+            # Other domains (for future expansion)
+            if 'computer science' in user_message.lower() or 'programming' in user_message.lower():
+                interests.append('computer science')
+            if 'web development' in user_message.lower() or 'web' in user_message.lower():
+                interests.append('web development')
+            if 'data science' in user_message.lower() or 'data' in user_message.lower():
+                interests.append('data science')
+                
+            # Store knowledge level in session
+            if 'knowledge_levels' not in session:
+                session['knowledge_levels'] = {}
+            
+            # Update knowledge level for detected interests
+            if interests and interests[0] == 'agentic-ai':
+                session['knowledge_levels']['agentic-ai'] = knowledge_level
+                
+            # Update the interests in the session
+            for interest in interests:
+                if interest not in session['interests']:
+                    session['interests'].append(interest)
+                    
+            # ALWAYS update the roadmap with every message to ensure it persists
+            try:
+                # First, check for keywords that might indicate knowledge level changes
+                user_msg_lower = user_message.lower()
+                roadmap_keywords = {
+                    'beginner': ['beginner', 'basics', 'start', 'new to', 'introduction', 'fundamentals'],
+                    'intermediate': ['intermediate', 'already know', 'familiar with', 'experience with', 'worked with', 'prompt engineering', 'frameworks'],
+                    'advanced': ['advanced', 'expert', 'rag', 'vector embeddings', 'multi-agent systems', 'tree of thought']
+                }
+                
+                # Initialize with previous interests or empty list
+                if 'interests' not in session:
+                    session['interests'] = []
+                
+                # Add new detected interests
+                for interest in interests:
+                    if interest not in session['interests']:
+                        session['interests'].append(interest)
+                
+                # Initialize knowledge levels dictionary if needed
+                if 'knowledge_levels' not in session:
+                    session['knowledge_levels'] = {}
+                
+                # Parse this specific message for knowledge level indicators
+                detected_level = None
+                # Check for specific requests for roadmap changes
+                is_roadmap_request = 'roadmap' in user_msg_lower or 'next steps' in user_msg_lower
+                
+                # Detect knowledge level from current message
+                for level, keywords in roadmap_keywords.items():
+                    if any(keyword in user_msg_lower for keyword in keywords):
+                        detected_level = level
+                        print(f"Detected {level} knowledge level from message")
+                        break
+                
+                # If we found a new knowledge level, update it
+                if detected_level:
+                    if 'agentic-ai' in session['interests'] or 'ai' in session['interests']:
+                        session['knowledge_levels']['agentic-ai'] = detected_level
+                
+                # ALWAYS create a roadmap even if we don't have explicit interests yet
+                # This ensures the roadmap is always shown
+                current_interests = session.get('interests', [])
+                
+                # Default to AI interest if nothing specified yet but they requested a roadmap
+                if (not current_interests) and is_roadmap_request:
+                    current_interests = ['agentic-ai']
+                    session['interests'] = current_interests
+                
+                # If we have interests, create/update the roadmap
+                if current_interests:
+                    # Get current knowledge level (default to beginner if not set)
+                    current_knowledge_level = 'beginner'
+                    if 'knowledge_levels' in session:
+                        current_knowledge_level = session['knowledge_levels'].get('agentic-ai', 'beginner')
+                    
+                    print(f"Generating roadmap with interests: {current_interests}, level: {current_knowledge_level}")
+                    
+                    # Generate a fresh tailored roadmap
+                    updated_roadmap = update_roadmap_with_knowledge_level(
+                        empty_roadmap,  # Start fresh each time 
+                        current_interests,
+                        current_knowledge_level
+                    )
+                    
+                    # ALWAYS save the updated roadmap to session
+                    session['roadmap'] = updated_roadmap
+                    print(f"Roadmap updated successfully with {len(updated_roadmap.get('children', []))} top-level nodes")
+                else:
+                    # If no interests detected yet, use empty roadmap
+                    session['roadmap'] = empty_roadmap
+            except Exception as roadmap_error:
+                print(f"Error updating roadmap: {str(roadmap_error)}")
+                import traceback
+                print(traceback.format_exc())
+            
+            # Return the response to the frontend
+            return jsonify({
+                'response': bot_response,
+                'roadmap': session['roadmap'],
+                'session_id': session['session_id']
+            })
+            
+        except Exception as api_error:
+            print(f"Error making API call: {str(api_error)}")
+            import traceback
+            print(traceback.format_exc())
+            return jsonify({
+                'response': "I'm sorry, I encountered an error connecting to my AI capabilities. Please try again.",
+                'roadmap': session['roadmap'],
+                'session_id': session['session_id']
+            })
+                
+    except Exception as outer_e:
+        import traceback
+        print(f"\n❌ CRITICAL ERROR in chat endpoint: {str(outer_e)}")
+        print(traceback.format_exc())
+        
+        # Return a friendly error message
+        return jsonify({
+            'response': "I'm sorry, I encountered an error processing your request. Please try again.",
+            'roadmap': empty_roadmap
+        })
+
+# Legacy keyword-based interest extraction (now used as fallback in LLMChatHandler)
+# This is kept for reference but no longer directly used
+def extract_interests_legacy(message):
+    interests = []
+    keywords = {
+        'computer science': ['programming', 'code', 'software', 'developer', 'computer science', 'coding'],
+        'ai': ['artificial intelligence', 'ai', 'machine learning', 'ml', 'data science', 'neural networks'],
+        'web development': ['web', 'frontend', 'backend', 'fullstack', 'html', 'css', 'javascript'],
+        'data science': ['data', 'analytics', 'statistics', 'visualization', 'big data'],
+        'cybersecurity': ['security', 'cyber', 'hacking', 'encryption', 'privacy', 'network security'],
+        'mobile development': ['mobile', 'app', 'android', 'ios', 'flutter', 'react native'],
+        'game development': ['game', 'gaming', 'unity', 'unreal', '3d', 'game design'],
+        'cloud computing': ['cloud', 'aws', 'azure', 'devops', 'infrastructure', 'serverless']
+    }
+    
+    message_lower = message.lower()
+    for field, terms in keywords.items():
+        if any(term in message_lower for term in terms):
+            interests.append(field)
+    
+    return interests
+
+# Update or create roadmap based on identified interests
+def update_roadmap_based_on_interests(current_roadmap, interests):
+    # If no interests yet, return current roadmap
+    if not interests:
+        return current_roadmap
+    
+    # Start with root node if roadmap is empty
+    if not current_roadmap or 'children' not in current_roadmap:
+        current_roadmap = {
+            'id': 'root',
+            'title': 'Your Career Path',
+            'type': 'ROOT',
+            'content': 'Your personalized career path roadmap',
+            'children': []
+        }
+    
+    # First, update with dynamic content from developer roadmaps
+    current_roadmap = update_roadmap_with_dynamic_content(current_roadmap, interests)
+    
+    # Then add our predefined career path information for topics not covered in roadmaps
+    # Career path definitions with detailed information
+    career_paths = {
+        'computer science': {
+            'id': 'cs',
+            'title': 'Computer Science',
+            'type': 'CATEGORY',
+            'content': 'Computer Science is the study of computers and computational systems, including their theory, design, development, and application. It encompasses theoretical studies, engineering design, and development of computational approaches.',
+            'resources': [
+                'https://www.coursera.org/browse/computer-science',
+                'https://www.edx.org/learn/computer-science'
+            ],
+            'children': [
+                {
+                    'id': 'software_engineering',
+                    'title': 'Software Engineering',
+                    'type': 'TOPIC',
+                    'content': 'Software engineering is the application of engineering principles to the design, development, and maintenance of software. Software engineers create applications used on computers, tech devices, and networks.',
+                    'resources': [
+                        'https://www.coursera.org/professional-certificates/meta-back-end-developer',
+                        'https://www.codecademy.com/learn/paths/computer-science'
+                    ],
+                    'children': []
+                },
+                {
+                    'id': 'algorithms',
+                    'title': 'Algorithms & Data Structures',
+                    'type': 'TOPIC',
+                    'content': 'Algorithms are step-by-step procedures for solving problems, while data structures organize and store data. Together, they form the foundation of computer science and efficient programming.',
+                    'resources': [
+                        'https://www.coursera.org/learn/algorithms-part1',
+                        'https://leetcode.com/'
+                    ],
+                    'children': []
+                },
+                {
+                    'id': 'databases',
+                    'title': 'Databases',
+                    'type': 'TOPIC',
+                    'content': 'Database systems organize, store, and retrieve data efficiently. Skills in this area include SQL, database design, normalization, and working with both relational and NoSQL databases.',
+                    'resources': [
+                        'https://www.postgresql.org/docs/current/tutorial.html',
+                        'https://university.mongodb.com/'
+                    ],
+                    'children': []
+                }
+            ]
+        },
+        'ai': {
+            'id': 'ai',
+            'title': 'Artificial Intelligence',
+            'type': 'CATEGORY',
+            'content': 'Artificial Intelligence (AI) involves creating systems capable of performing tasks that typically require human intelligence. This includes learning, reasoning, problem-solving, perception, and language understanding.',
+            'resources': [
+                'https://www.coursera.org/learn/ai-for-everyone',
+                'https://www.edx.org/search?q=artificial+intelligence'
+            ],
+            'children': [
+                {
+                    'id': 'machine_learning',
+                    'title': 'Machine Learning',
+                    'type': 'TOPIC',
+                    'content': 'Machine Learning is a subset of AI that focuses on building systems that learn from data. It includes supervised learning, unsupervised learning, and reinforcement learning techniques.',
+                    'resources': [
+                        'https://www.coursera.org/learn/machine-learning',
+                        'https://www.kaggle.com/learn/intro-to-machine-learning'
+                    ],
+                    'children': [
+                        {
+                            'id': 'deep_learning',
+                            'title': 'Deep Learning',
+                            'type': 'SUBTOPIC',
+                            'content': "Deep Learning uses neural networks with many layers (deep neural networks) to analyze various factors of data. It's particularly powerful for image and speech recognition, natural language processing, and more.",
+                            'resources': [
+                                'https://www.deeplearning.ai/',
+                                'https://www.tensorflow.org/tutorials'
+                            ],
+                            'children': []
+                        }
+                    ]
+                },
+                {
+                    'id': 'nlp',
+                    'title': 'Natural Language Processing',
+                    'type': 'TOPIC',
+                    'content': 'Natural Language Processing (NLP) focuses on the interaction between computers and human language. It involves enabling computers to understand, interpret, and generate human language in a valuable way.',
+                    'resources': [
+                        'https://www.coursera.org/specializations/natural-language-processing',
+                        'https://huggingface.co/course/chapter1/1'
+                    ],
+                    'children': []
+                },
+                {
+                    'id': 'computer_vision',
+                    'title': 'Computer Vision',
+                    'type': 'TOPIC',
+                    'content': 'Computer Vision enables computers to derive meaningful information from digital images, videos, and other visual inputs. Applications include image recognition, object detection, and scene reconstruction.',
+                    'resources': [
+                        'https://www.coursera.org/specializations/deep-learning',
+                        'https://opencv.org/'
+                    ],
+                    'children': []
+                }
+            ]
+        },
+        'web development': {
+            'id': 'web_dev',
+            'title': 'Web Development',
+            'type': 'CATEGORY',
+            'content': 'Web development involves creating and maintaining websites and web applications. It encompasses everything from simple static webpages to complex web applications, e-commerce sites, and social network services.',
+            'resources': [
+                'https://developer.mozilla.org/en-US/docs/Learn',
+                'https://www.theodinproject.com/'
+            ],
+            'children': [
+                {
+                    'id': 'frontend',
+                    'title': 'Frontend Development',
+                    'type': 'TOPIC',
+                    'content': 'Frontend development focuses on what users see and interact with in a browser. It involves HTML for structure, CSS for presentation, and JavaScript for functionality, along with various frameworks and libraries.',
+                    'resources': [
+                        'https://www.freecodecamp.org/learn/responsive-web-design/',
+                        'https://reactjs.org/tutorial/tutorial.html'
+                    ],
+                    'children': []
+                },
+                {
+                    'id': 'backend',
+                    'title': 'Backend Development',
+                    'type': 'TOPIC',
+                    'content': 'Backend development involves server-side logic, database interactions, APIs, architecture, and server configuration. It powers the frontend and manages data processing and storage.',
+                    'resources': [
+                        'https://nodejs.org/en/learn',
+                        'https://www.djangoproject.com/start/'
+                    ],
+                    'children': []
+                }
+            ]
+        },
+        'data science': {
+            'id': 'data_science',
+            'title': 'Data Science',
+            'type': 'CATEGORY',
+            'content': 'Data Science combines domain expertise, programming skills, and knowledge of math and statistics to extract meaningful insights from data. It involves analyzing complex data to help organizations make informed decisions.',
+            'resources': [
+                'https://www.coursera.org/professional-certificates/ibm-data-science',
+                'https://www.datacamp.com/tracks/data-scientist-with-python'
+            ],
+            'children': [
+                {
+                    'id': 'data_analysis',
+                    'title': 'Data Analysis',
+                    'type': 'TOPIC',
+                    'content': 'Data Analysis involves inspecting, cleansing, transforming, and modeling data to discover useful information, inform conclusions, and support decision-making. Tools include Python, R, SQL, and Excel.',
+                    'resources': [
+                        'https://www.kaggle.com/learn/pandas',
+                        'https://www.datacamp.com/courses/introduction-to-data-science-in-python'
+                    ],
+                    'children': []
+                },
+                {
+                    'id': 'data_visualization',
+                    'title': 'Data Visualization',
+                    'type': 'TOPIC',
+                    'content': 'Data Visualization is the graphical representation of information and data. It uses visual elements like charts, graphs, and maps to provide an accessible way to understand trends, outliers, and patterns in data.',
+                    'resources': [
+                        'https://www.tableau.com/learn/training',
+                        'https://d3js.org/'
+                    ],
+                    'children': []
+                }
+            ]
+        },
+        'cybersecurity': {
+            'id': 'cybersecurity',
+            'title': 'Cybersecurity',
+            'type': 'CATEGORY',
+            'content': 'Cybersecurity involves protecting systems, networks, and programs from digital attacks. These attacks often aim to access, change, or destroy sensitive information; extort money; or interrupt normal business processes.',
+            'resources': [
+                'https://www.coursera.org/professional-certificates/google-cybersecurity',
+                'https://www.sans.org/cyberaces/'
+            ],
+            'children': [
+                {
+                    'id': 'network_security',
+                    'title': 'Network Security',
+                    'type': 'TOPIC',
+                    'content': 'Network Security focuses on protecting the usability and integrity of your network and data. It includes both hardware and software technologies, and effective network security manages access to the network.',
+                    'resources': [
+                        'https://www.cisco.com/c/en/us/training-events/training-certifications/certifications/associate/ccna.html',
+                        'https://www.comptia.org/certifications/security'
+                    ],
+                    'children': []
+                },
+                {
+                    'id': 'ethical_hacking',
+                    'title': 'Ethical Hacking',
+                    'type': 'TOPIC',
+                    'content': 'Ethical Hacking involves identifying weaknesses in computer systems and networks to prevent malicious attacks. Ethical hackers use their skills to improve security by finding and fixing vulnerabilities.',
+                    'resources': [
+                        'https://www.eccouncil.org/programs/certified-ethical-hacker-ceh/',
+                        'https://www.hackthebox.com/'
+                    ],
+                    'children': []
+                }
+            ]
+        }
+    }
+
+    # Add each interest as a separate node if it doesn't exist yet
+    existing_ids = [child['id'] for child in current_roadmap['children']]
+    
+    for interest in interests:
+        if interest in career_paths:
+            career_info = career_paths[interest]
+            
+            # Check if this career path is already in the roadmap
+            if career_info['id'] not in existing_ids:
+                current_roadmap['children'].append(career_info)
+                existing_ids.append(career_info['id'])
+    
+    return current_roadmap
+
+def generate_initial_roadmap():
+    return {
+        'id': 'root',
+        'title': 'Your Career Path',
+        'type': 'ROOT',
+        'content': 'Your personalized career path roadmap',
+        'children': []
+    }
+
+# Legacy response generation functions - kept for reference but no longer directly used
+
+# These functions have been replaced by the LLMChatHandler which provides
+# more personalized, context-aware responses using the Groq API
 
 # Initialize Groq client
 client = Groq()
-client.api_key = os.getenv("GROQ_API_KEY")
+groq_api_key = os.getenv("GROQ_API_KEY")
+if not groq_api_key:
+    print("ERROR: GROQ_API_KEY not set for global client!")
+else:
+    client.api_key = groq_api_key
 
 # In-memory storage for user sessions (MVP)
 user_sessions: Dict[str, Dict[str, Any]] = {}
@@ -545,283 +1101,19 @@ def format_roadmap_text(node, level=0):
     
     return "\n".join(lines)
 
-# Set up Chainlit page configuration
-cl.ChatSettings(
-    features={
-        "latex": True,
-        "markdown": True,
-    }
-)
+# Empty roadmap structure (will be filled with dynamic data)
+empty_roadmap = {
+    'id': 'root',
+    'title': 'My Career Roadmap',
+    'type': 'ROOT',
+    'content': 'Your personalized learning journey',
+    'children': []  # Initially empty - will be populated based on user interests
+}
 
-# Chainlit event handlers
-@cl.on_chat_start
-async def on_chat_start():
-    # Get user ID and initialize roadmap
-    user_id = get_user_id(cl.user_session)
-    roadmap = get_or_create_roadmap(user_id)
-    
-    # Create the HTML for the interactive roadmap
-    roadmap_html = generate_interactive_roadmap_html(roadmap)
-    
-    # Create the welcome message with split-screen layout
-    html_content = f"""
-    <div class="split-view">
-        <div class="chat-side">
-            <div>
-                <h3>Hi there! I'm your CareerPath.AI advisor.</h3>
-                <p>I can help personalize your learning roadmap based on your interests. Let me know what field you're interested in!</p>
-                <p>I've prepared an interactive roadmap for you. As we chat, I'll help you explore different career paths and options.</p>
-                <p>Click on any node in the roadmap to learn more about that career path.</p>
-            </div>
-        </div>
-        <div class="roadmap-side">
-            <div class="roadmap-title">My Career Roadmap</div>
-            <div id="roadmap-container">
-                {roadmap_html}
-            </div>
-        </div>
-    </div>
-    """
-    
-    # Add D3.js library
-    d3_script = """
-    <script src="https://d3js.org/d3.v7.min.js"></script>
-    """
-    
-    # Send the welcome message with split-screen layout
-    welcome_msg = cl.Message(content="")
-    welcome_msg.html = d3_script + html_content
-    await welcome_msg.send()
-    
-    # Initialize the session
-    cl.user_session.set("history", [
-        {"role": "system", "content": INITIAL_PROMPT}
-    ])
-    cl.user_session.set("roadmap_initialized", True)
+# Set up Flask routes
+# Remove this duplicate route - it's already defined above
 
-# Function to generate formatted content for a roadmap node
-def format_node_content(node):
-    content = f"## {node.title}\n\n{node.content}"
-    
-    if node.resources and len(node.resources) > 0:
-        content += "\n\n### Resources\n"
-        for res in node.resources:
-            if res.startswith("http"):
-                content += f"- [{res}]({res})\n"
-            else:
-                content += f"- {res}\n"
-    
-    return content
 
-@cl.on_message
-async def on_message(message: cl.Message):
-    try:
-        # Get conversation history
-        history = cl.user_session.get("history")
-        
-        if history is None:
-            history = [{"role": "system", "content": INITIAL_PROMPT}]
-        
-        # Add user's message to history
-        history.append({"role": "user", "content": message.content})
-        
-        # Process user message to update roadmap
-        user_id = get_user_id(cl.user_session)
-        roadmap = get_or_create_roadmap(user_id)
-        
-        # Create a new message with streaming
-        msg = cl.Message(content="")
-        await msg.send()
-        
-        # Variables to collect the streamed response
-        full_response = ""
-        
-        # Stream the response from Groq
-        for chunk in client.chat.completions.create(
-            messages=history,
-            model="llama-3.3-70b-versatile",
-            temperature=0.7,
-            max_tokens=1024,
-            stream=True,
-        ):
-            content = chunk.choices[0].delta.content
-            if content is not None:
-                full_response += content
-                await msg.stream_token(content)
-        
-        # Finalize the message
-        await msg.update()
-        
-        # Add assistant's response to history
-        history.append({"role": "assistant", "content": full_response})
-        cl.user_session.set("history", history)
-        
-        # Update roadmap based on user input
-        lowertext = message.content.lower()
-        
-        # Check for career interests in the message
-        new_nodes_added = False
-        
-        # Handling AI and Machine Learning queries
-        if any(term in lowertext for term in ["ai", "machine learning", "artificial intelligence", "data science", "ml"]):
-            ai_node = None
-            # Find AI node if it exists
-            for child in roadmap.children:
-                if child.title == "Machine Learning" or child.title == "AI Engineer":
-                    ai_node = child
-                    break
-                for subchild in child.children:
-                    if subchild.title == "AI Engineer":
-                        ai_node = subchild
-                        break
-            
-            # Create new AI related nodes
-            if ai_node:
-                # Add specific interest as a new node
-                interest_title = "AI Specialization"
-                if "computer vision" in lowertext:
-                    interest_title = "Computer Vision"
-                elif "nlp" in lowertext or "language" in lowertext:
-                    interest_title = "Natural Language Processing"
-                elif "reinforcement" in lowertext:
-                    interest_title = "Reinforcement Learning"
-                
-                new_node = RoadmapNode(
-                    id=str(uuid.uuid4()),
-                    title=interest_title,
-                    node_type="TOPIC",
-                    content=f"Specialized AI path focusing on {interest_title}.",
-                    resources=["Online courses", "Research papers", "Practice projects"]
-                )
-                ai_node.add_child(new_node)
-                new_nodes_added = True
-        
-        # Handling Web Development queries
-        elif any(term in lowertext for term in ["web", "frontend", "backend", "full stack", "javascript", "html", "css"]):
-            # Find or create Web Dev node
-            web_node = None
-            cs_node = None
-            
-            # Find Computer Science node
-            for child in roadmap.children:
-                if child.title == "Computer Science":
-                    cs_node = child
-                    # Look for Web Dev within CS
-                    for subchild in child.children:
-                        if "Full Stack" in subchild.title or "Web" in subchild.title:
-                            web_node = subchild
-                            break
-                    break
-            
-            if not web_node and cs_node:
-                # Create Web Dev node if it doesn't exist
-                web_node = RoadmapNode(
-                    id=str(uuid.uuid4()),
-                    title="Full Stack Development",
-                    node_type="CATEGORY",
-                    content="Web development career path covering frontend, backend, and full stack skills."
-                )
-                cs_node.add_child(web_node)
-            
-            if web_node:
-                # Add specialized web node based on interest
-                if "frontend" in lowertext or "html" in lowertext or "css" in lowertext:
-                    new_node = RoadmapNode(
-                        id=str(uuid.uuid4()),
-                        title="Frontend Development",
-                        node_type="TOPIC",
-                        content="Frontend development focuses on creating user interfaces and experiences using HTML, CSS, and JavaScript.",
-                        resources=["MDN Web Docs", "Frontend Masters", "freeCodeCamp"]
-                    )
-                    web_node.add_child(new_node)
-                elif "backend" in lowertext or "server" in lowertext or "database" in lowertext:
-                    new_node = RoadmapNode(
-                        id=str(uuid.uuid4()),
-                        title="Backend Development",
-                        node_type="TOPIC",
-                        content="Backend development involves creating server-side logic, databases, and APIs.",
-                        resources=["Node.js docs", "PostgreSQL tutorials", "RESTful API guides"]
-                    )
-                    web_node.add_child(new_node)
-                else:
-                    new_node = RoadmapNode(
-                        id=str(uuid.uuid4()),
-                        title="Full Stack Skills",
-                        node_type="TOPIC",
-                        content="Full stack development covers both frontend and backend technologies.",
-                        resources=["The Odin Project", "Full Stack Open"]
-                    )
-                    web_node.add_child(new_node)
-                
-                new_nodes_added = True
-        
-        # Create new interactive roadmap HTML if nodes were added
-        if new_nodes_added:
-            roadmap_html = generate_interactive_roadmap_html(roadmap)
-            
-            # Create a split-screen response with updated roadmap
-            html_content = f"""
-            <div class="split-view">
-                <div class="chat-side">
-                    <div>
-                        <p>{full_response}</p>
-                    </div>
-                </div>
-                <div class="roadmap-side">
-                    <div class="roadmap-title">My Career Roadmap</div>
-                    <div id="roadmap-container">
-                        {roadmap_html}
-                    </div>
-                </div>
-            </div>
-            """
-            
-            # Add D3.js library
-            d3_script = """
-            <script src="https://d3js.org/d3.v7.min.js"></script>
-            """
-            
-            # Send the split-screen update
-            update_msg = cl.Message(content="I've updated your career roadmap based on our conversation:")
-            update_msg.html = d3_script + html_content
-            await update_msg.send()
-        
-        # Perform web search for relevant resources
-        if any(word in lowertext for word in ['career', 'job', 'industry', 'trends', 'skills', 'learn', 'education']):
-            # Send a message that we're gathering resources
-            resources_msg = cl.Message(content="Finding relevant resources for you...")
-            await resources_msg.send()
-            
-            try:
-                # Use DuckDuckGo for web search
-                search_query = message.content.replace(' ', '+') + "+career+path+guide"
-                url = f'https://duckduckgo.com/html/?q={search_query}'
-                headers = {'User-Agent': 'Mozilla/5.0'}
-                response = requests.get(url, headers=headers)
-                soup = BeautifulSoup(response.text, 'html.parser')
-                
-                # Get top 3 results
-                results = soup.find_all('div', class_='result')[:3]
-                search_results = []
-                for i, result in enumerate(results):
-                    try:
-                        title_elem = result.find('h2')
-                        link_elem = result.find('a')
-                        if title_elem and link_elem:
-                            title = title_elem.text
-                            link = link_elem.get('href')
-                            if title and link:
-                                search_results.append(f"{i+1}. [{title}]({link})")
-                    except Exception as e:
-                        print(f"Error parsing search result: {e}")
-                
-                if search_results:
-                    web_info = "### Relevant resources:\n\n" + "\n".join(search_results)
-                    await resources_msg.update(content=web_info)
-                else:
-                    await resources_msg.update(content="I couldn't find specific resources for this topic. Try asking about a more specific career area.")
-            except Exception as e:
-                await resources_msg.update(content=f"I encountered an issue while searching for resources: {str(e)}")
-    
-    except Exception as e:
-        await cl.Message(content=f"An error occurred: {str(e)}").send()
+if __name__ == "__main__":
+    # Use port 5008 since 5001, 5005, 5006, and 5007 might be in use
+    app.run(debug=True, port=5008)
